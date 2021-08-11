@@ -61,6 +61,11 @@ export const FEATURES = Object.freeze([
     flag: 'accessible-object-hasownproperty',
     url: 'https://github.com/tc39/proposal-accessible-object-hasownproperty',
   },
+  {
+    name: 'Var Expression',
+    flag: 'var-expression',
+    url: 'n/a',
+  },
 ].map(Object.freeze));
 
 class ExecutionContextStack extends Array {

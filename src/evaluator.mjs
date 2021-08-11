@@ -30,6 +30,7 @@ import {
   Evaluate_IdentifierReference,
   Evaluate_CommaOperator,
   Evaluate_This,
+  Evaluate_Var,
   Evaluate_Literal,
   Evaluate_ArrayLiteral,
   Evaluate_ObjectLiteral,
@@ -150,6 +151,8 @@ export function* Evaluate(node) {
       return yield* Evaluate_CommaOperator(node);
     case 'ThisExpression':
       return Evaluate_This(node);
+    case 'VarExpression':
+      return Evaluate_Var(node);
     case 'IdentifierReference':
       return Evaluate_IdentifierReference(node);
     case 'NullLiteral':

@@ -40,6 +40,9 @@ export class DeclarativeEnvironmentRecord extends EnvironmentRecord {
   constructor() {
     super();
     this.bindings = new ValueMap();
+    if (surroundingAgent.feature('var-expression')) {
+      this.CreateMutableBinding(Value.var, Value.false);
+    }
   }
 
   // #sec-declarative-environment-records-hasbinding-n

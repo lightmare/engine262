@@ -1,5 +1,6 @@
 export * from './IdentifierReference.mjs';
 export * from './This.mjs';
+export * from './Var.mjs';
 export * from './Literal.mjs';
 export * from './ClassExpression.mjs';
 export * from './ClassDefinitionEvaluation.mjs';

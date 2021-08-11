@@ -1,3 +1,4 @@
+import { surroundingAgent } from '../engine.mjs';
 import {
   TV,
   PropName,
@@ -683,6 +684,14 @@ export class ExpressionParser extends FunctionParser {
         const node = this.startNode();
         this.next();
         return this.finishNode(node, 'ThisExpression');
+      }
+      case Token.VAR: {
+        if (!surroundingAgent.feature('var-expression')) {
+          return this.unexpected();
+        }
+        const node = this.startNode();
+        this.next();
+        return this.finishNode(node, 'VarExpression');
       }
       case Token.NUMBER:
       case Token.BIGINT:

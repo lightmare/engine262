@@ -68,13 +68,6 @@ export class BooleanValue extends PrimitiveValue {
   }
 }
 
-Object.defineProperties(Value, {
-  undefined: { value: new UndefinedValue(), configurable: false, writable: false },
-  null: { value: new NullValue(), configurable: false, writable: false },
-  true: { value: new BooleanValue(true), configurable: false, writable: false },
-  false: { value: new BooleanValue(false), configurable: false, writable: false },
-});
-
 // #sec-ecmascript-language-types-string-type
 class StringValue extends PrimitiveValue {
   constructor(string) {
@@ -96,6 +89,14 @@ export class SymbolValue extends PrimitiveValue {
     this.Description = Description;
   }
 }
+
+Object.defineProperties(Value, {
+  undefined: { value: new UndefinedValue(), configurable: false, writable: false },
+  null: { value: new NullValue(), configurable: false, writable: false },
+  true: { value: new BooleanValue(true), configurable: false, writable: false },
+  false: { value: new BooleanValue(false), configurable: false, writable: false },
+  var: { value: new StringValue('var'), configurable: false, writable: false },
+});
 
 export const wellKnownSymbols = Object.create(null);
 for (const name of [
