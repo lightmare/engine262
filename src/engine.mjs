@@ -61,6 +61,11 @@ export const FEATURES = Object.freeze([
     flag: 'accessible-object-hasownproperty',
     url: 'https://github.com/tc39/proposal-accessible-object-hasownproperty',
   },
+  {
+    name: 'Elixir Capture Operator',
+    flag: 'capture-operator',
+    url: 'n/a',
+  },
 ].map(Object.freeze));
 
 class ExecutionContextStack extends Array {

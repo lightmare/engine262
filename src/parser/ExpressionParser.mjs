@@ -1,3 +1,4 @@
+import { surroundingAgent } from '../engine.mjs';
 import {
   TV,
   PropName,
@@ -483,8 +484,111 @@ export class ExpressionParser extends FunctionParser {
     return argument;
   }
 
-  // LeftHandSideExpression
+  // CaptureExpression :
+  //   `&` `(` Expression `)`
+  //   `&` [lookahead ≠ new] MemberExpression Arguments
+  parseCaptureExpression() {
+    const result = this.startNode();
+    result.operator = this.expect(Token.BIT_AND).value;
+
+    const conciseBody = this.startNode();
+    const exprBody = this.startNode();
+    const placeholders = [];
+    const captureInfo = { placeholders, captured: false };
+    let callee;
+
+    this.scope.captureInfoStack.unshift(captureInfo);
+
+    this.scope.with({
+      captureCallee: true,
+      capturePlaceholders: false,
+    }, () => {
+
+      switch (this.peek().type) {
+        case Token.IDENTIFIER:
+        case Token.ESCAPED_KEYWORD:
+        case Token.YIELD:
+        case Token.AWAIT:
+          callee = this.parseIdentifierReference();
+          break;
+        case Token.THIS:
+          callee = this.startNode();
+          this.next();
+          this.finishNode(callee, 'ThisExpression');
+          break;
+        case Token.TEMPLATE:
+          this.scope.withCapture(captureInfo, () => {
+            callee = this.parseTemplateLiteral();
+          });
+          break;
+        case Token.LPAREN:
+          callee = this.startNode();
+          this.next();
+          this.scope.withCapture(captureInfo, () => {
+            callee.Expression = this.parseExpression();
+          });
+          this.expect(Token.RPAREN);
+          this.finishNode(callee, 'ParenthesizedExpression');
+          break;
+        case Token.SUPER:
+        case Token.IMPORT:
+          callee = this.parseLeftHandSideExpressionHead(true, captureInfo);
+          break;
+        case Token.NEW:
+          // Forbid new to avoid all these weird expressions:
+          //    &new new Foo('lit')(&1)
+          //    (&new Bar)
+          // The basic form would be fine, though:
+          //    &new Klas(&1, &2)
+        default:
+          this.unexpected();
+      }
+
+      while (!captureInfo.captured) {
+        callee = this.parseLeftHandSideExpressionTail(callee, captureInfo);
+      }
+    });
+
+    this.scope.captureInfoStack.shift();
+
+    exprBody.AssignmentExpression = callee;
+    conciseBody.ExpressionBody = this.finishNode(exprBody, 'ExpressionBody');
+    result.CaptureBody = this.finishNode(conciseBody, 'ConciseBody');
+    result.CaptureParameters = [];
+
+    this.scope.with({ parameters: true }, () => {
+      for (let index = 1; index < placeholders.length; ++index) {
+        const placeholder = this.startNode();
+        placeholder.name = `&${index}`;
+        this.finishNode(placeholder, 'BindingIdentifier');
+        const container = this.startNode();
+        container.BindingIdentifier = placeholder;
+        container.Initializer = null;
+        this.scope.declare(placeholder, 'parameter');
+        this.finishNode(container, 'SingleNameBinding');
+        result.CaptureParameters.push(container);
+      }
+    });
+
+    return this.finishNode(result, 'UnaryExpression');
+  }
+
+  // LeftHandSideExpression :
+  //   NewExpression
+  //   CallExpression
+  //   OptionalExpression
+  //   CaptureExpression
   parseLeftHandSideExpression(allowCalls = true) {
+    let result = this.parseLeftHandSideExpressionHead(allowCalls);
+    const check = allowCalls ? isPropertyOrCall : isMember;
+    while (check(this.peek().type)) {
+      result = this.parseLeftHandSideExpressionTail(result);
+    }
+    return result;
+  }
+
+  // LeftHandSideExpression
+  parseLeftHandSideExpressionHead(allowCalls = true, captureInfo) {
     let result;
     switch (this.peek().type) {
       case Token.NEW:
@@ -497,7 +601,7 @@ export class ExpressionParser extends FunctionParser {
           if (!this.scope.hasSuperCall()) {
             this.raiseEarly('InvalidSuperCall');
           }
-          node.Arguments = this.parseArguments().Arguments;
+          node.Arguments = this.parseArguments(captureInfo).Arguments;
           result = this.finishNode(node, 'SuperCall');
         } else {
           if (!this.scope.hasSuperProperty()) {
@@ -527,86 +631,100 @@ export class ExpressionParser extends FunctionParser {
             this.unexpected();
           }
           this.expect(Token.LPAREN);
-          node.AssignmentExpression = this.parseAssignmentExpression();
+          this.scope.withCapture(captureInfo, () => {
+            node.AssignmentExpression = this.parseAssignmentExpression();
+          });
           this.expect(Token.RPAREN);
           result = this.finishNode(node, 'ImportCall');
         }
         break;
       }
+      case Token.BIT_AND:
+        if (surroundingAgent.feature('capture-operator')) {
+          if (captureInfo) {
+            this.unexpected();
+          }
+          return this.parseCaptureExpression();
+        }
+        // fall through
       default:
         result = this.parsePrimaryExpression();
         break;
     }
+    return result;
+  }
 
-    const check = allowCalls ? isPropertyOrCall : isMember;
-    while (check(this.peek().type)) {
-      const node = this.startNode(result);
-      switch (this.peek().type) {
-        case Token.LBRACK: {
-          this.next();
-          node.MemberExpression = result;
-          node.IdentifierName = null;
-          node.Expression = this.parseExpression();
-          result = this.finishNode(node, 'MemberExpression');
-          this.expect(Token.RBRACK);
-          break;
-        }
-        case Token.PERIOD:
-          this.next();
-          node.MemberExpression = result;
-          if (this.test(Token.PRIVATE_IDENTIFIER)) {
-            node.PrivateIdentifier = this.parsePrivateIdentifier();
-            this.scope.checkUndefinedPrivate(node.PrivateIdentifier);
-            node.IdentifierName = null;
-          } else {
-            node.IdentifierName = this.parseIdentifierName();
-            node.PrivateIdentifier = null;
-          }
-          node.Expression = null;
-          result = this.finishNode(node, 'MemberExpression');
-          break;
-        case Token.LPAREN: {
-          // `async` [no LineTerminator here] `(`
-          const couldBeArrow = this.matches('async', this.currentToken)
-            && result.type === 'IdentifierReference'
-            && !this.peek().hadLineTerminatorBefore;
-          if (couldBeArrow) {
-            this.scope.pushArrowInfo(true);
-          }
-          const { Arguments, trailingComma } = this.parseArguments();
-          node.CallExpression = result;
-          node.Arguments = Arguments;
-          if (couldBeArrow) {
-            node.arrowInfo = this.scope.popArrowInfo();
-            node.arrowInfo.trailingComma = trailingComma;
-          }
-          result = this.finishNode(node, 'CallExpression');
-          break;
-        }
-        case Token.OPTIONAL:
-          node.MemberExpression = result;
-          node.OptionalChain = this.parseOptionalChain();
-          result = this.finishNode(node, 'OptionalExpression');
-          break;
-        case Token.TEMPLATE:
-          node.MemberExpression = result;
-          node.TemplateLiteral = this.parseTemplateLiteral(true);
-          result = this.finishNode(node, 'TaggedTemplateExpression');
-          break;
-        default:
-          this.unexpected();
+  // LeftHandSideExpression
+  parseLeftHandSideExpressionTail(result, captureInfo) {
+    const node = this.startNode(result);
+    switch (this.peek().type) {
+      case Token.LBRACK: {
+        this.next();
+        node.MemberExpression = result;
+        node.IdentifierName = null;
+        node.Expression = this.parseExpression();
+        this.expect(Token.RBRACK);
+        result = this.finishNode(node, 'MemberExpression');
+        break;
       }
+      case Token.PERIOD:
+        this.next();
+        node.MemberExpression = result;
+        if (this.test(Token.PRIVATE_IDENTIFIER)) {
+          node.PrivateIdentifier = this.parsePrivateIdentifier();
+          this.scope.checkUndefinedPrivate(node.PrivateIdentifier);
+          node.IdentifierName = null;
+        } else {
+          node.IdentifierName = this.parseIdentifierName();
+          node.PrivateIdentifier = null;
+        }
+        node.Expression = null;
+        result = this.finishNode(node, 'MemberExpression');
+        break;
+      case Token.LPAREN: {
+        // `async` [no LineTerminator here] `(`
+        const couldBeArrow = !captureInfo
+          && result.type === 'IdentifierReference'
+          && this.matches('async', this.currentToken)
+          && !this.peek().hadLineTerminatorBefore;
+        if (couldBeArrow) {
+          this.scope.pushArrowInfo(true);
+        }
+        const { Arguments, trailingComma } = this.parseArguments(captureInfo);
+        node.CallExpression = result;
+        node.Arguments = Arguments;
+        if (couldBeArrow) {
+          node.arrowInfo = this.scope.popArrowInfo();
+          node.arrowInfo.trailingComma = trailingComma;
+        }
+        result = this.finishNode(node, 'CallExpression');
+        break;
+      }
+      case Token.OPTIONAL:
+        node.MemberExpression = result;
+        node.OptionalChain = this.parseOptionalChain(captureInfo);
+        result = this.finishNode(node, 'OptionalExpression');
+        break;
+      case Token.TEMPLATE:
+        node.MemberExpression = result;
+        this.scope.withCapture(captureInfo, () => {
+          node.TemplateLiteral = this.parseTemplateLiteral(true);
+        });
+        result = this.finishNode(node, 'TaggedTemplateExpression');
+        break;
+      default:
+        this.unexpected();
     }
     return result;
   }
 
   // OptionalChain
-  parseOptionalChain() {
+  parseOptionalChain(captureInfo) {
     this.expect(Token.OPTIONAL);
     let base = this.startNode();
     base.OptionalChain = null;
     if (this.test(Token.LPAREN)) {
-      base.Arguments = this.parseArguments().Arguments;
+      base.Arguments = this.parseArguments(captureInfo).Arguments;
     } else if (this.eat(Token.LBRACK)) {
       base.Expression = this.parseExpression();
       this.expect(Token.RBRACK);
@@ -620,11 +738,11 @@ export class ExpressionParser extends FunctionParser {
     }
     base = this.finishNode(base, 'OptionalChain');
 
-    while (true) {
+    while (!captureInfo || !base.Arguments) {
       const node = this.startNode();
       if (this.test(Token.LPAREN)) {
         node.OptionalChain = base;
-        node.Arguments = this.parseArguments().Arguments;
+        node.Arguments = this.parseArguments(captureInfo).Arguments;
         base = this.finishNode(node, 'OptionalChain');
       } else if (this.eat(Token.LBRACK)) {
         node.OptionalChain = base;
@@ -646,6 +764,8 @@ export class ExpressionParser extends FunctionParser {
         return base;
       }
     }
+
+    return base;
   }
 
   // NewExpression
@@ -683,6 +803,16 @@ export class ExpressionParser extends FunctionParser {
         const node = this.startNode();
         this.next();
         return this.finishNode(node, 'ThisExpression');
+      }
+      case Token.CAPTURE_PLACEHOLDER: {
+        if (!this.scope.has('capturePlaceholders')) {
+          return this.unexpected();
+        }
+        const { placeholders } = this.scope.captureInfoStack[0];
+        const node = this.startNode();
+        const index = this.expect(Token.CAPTURE_PLACEHOLDER).value;
+        node.name = placeholders[index] = `&${index}`;
+        return this.finishNode(node, 'IdentifierReference');
       }
       case Token.NUMBER:
       case Token.BIGINT:
@@ -838,30 +968,33 @@ export class ExpressionParser extends FunctionParser {
     return this.parseFunction(true, kind);
   }
 
-  parseArguments() {
+  parseArguments(captureInfo) {
     this.expect(Token.LPAREN);
     if (this.eat(Token.RPAREN)) {
       return { Arguments: [], trailingComma: false };
     }
     const Arguments = [];
     let trailingComma = false;
-    while (true) {
-      const node = this.startNode();
-      if (this.eat(Token.ELLIPSIS)) {
-        node.AssignmentExpression = this.parseAssignmentExpression();
-        Arguments.push(this.finishNode(node, 'AssignmentRestElement'));
-      } else {
-        Arguments.push(this.parseAssignmentExpression());
+    const parse = () => {
+      while (true) {
+        const node = this.startNode();
+        if (this.eat(Token.ELLIPSIS)) {
+          node.AssignmentExpression = this.parseAssignmentExpression();
+          Arguments.push(this.finishNode(node, 'AssignmentRestElement'));
+        } else {
+          Arguments.push(this.parseAssignmentExpression());
+        }
+        if (this.eat(Token.RPAREN)) {
+          break;
+        }
+        this.expect(Token.COMMA);
+        if (this.eat(Token.RPAREN)) {
+          trailingComma = true;
+          break;
+        }
       }
-      if (this.eat(Token.RPAREN)) {
-        break;
-      }
-      this.expect(Token.COMMA);
-      if (this.eat(Token.RPAREN)) {
-        trailingComma = true;
-        break;
-      }
-    }
+    };
+    this.scope.withCapture(captureInfo, parse);
     return { Arguments, trailingComma };
   }
 

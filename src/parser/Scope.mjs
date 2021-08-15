@@ -15,6 +15,8 @@ export const Flag = {
   'in',
   'default',
   'module',
+  'captureCallee',
+  'capturePlaceholders',
 ].forEach((name, i) => {
   /* c8 ignore next */
   if (i > 31) {
@@ -117,6 +119,7 @@ export class Scope {
     this.labels = [];
     this.arrowInfoStack = [];
     this.assignmentInfoStack = [];
+    this.captureInfoStack = [];
     this.exports = new Set();
     this.undefinedExports = new Map();
     this.privateScope = undefined;
@@ -248,6 +251,21 @@ export class Scope {
     this.parser.state.strict = oldStrict;
     this.flags = oldFlags;
 
+    return r;
+  }
+
+  withCapture(captureInfo, f) {
+    if (!captureInfo) {
+      return f();
+    }
+    const r = this.with({
+      captureCallee: false,
+      capturePlaceholders: true,
+      default: false,
+      lexical: true,
+      variable: true,
+    }, f);
+    captureInfo.captured = true;
     return r;
   }
 

@@ -6,10 +6,13 @@ import {
   IsPropertyReference,
   IsSuperReference,
   IsUnresolvableReference,
+  OrdinaryFunctionCreate,
+  SetFunctionName,
   ToBoolean,
   ToNumber,
   ToObject,
   ToNumeric,
+  sourceTextMatchedBy,
 } from '../abstract-ops/all.mjs';
 import { Evaluate } from '../evaluator.mjs';
 import { Q, ReturnIfAbrupt, X } from '../completion.mjs';
@@ -165,6 +168,32 @@ function* Evaluate_UnaryExpression_Bang({ UnaryExpression }) {
   return Value.true;
 }
 
+// #sec-capture-operator-runtime-semantics-evaluation
+//   UnaryExpression : `&` CaptureExpression
+function* Evaluate_UnaryExpression_Ampersand(UnaryExpression) {
+  const { CaptureBody, CaptureParameters } = UnaryExpression;
+  // 2. Let scope be the LexicalEnvironment of the running execution context.
+  const scope = surroundingAgent.runningExecutionContext.LexicalEnvironment;
+  // 3. Let privateScope be the running execution context's PrivateEnvironment.
+  const privateScope = surroundingAgent.runningExecutionContext.PrivateEnvironment;
+  // 4. Let sourceText be the source text matched by ArrowFunction.
+  const sourceText = sourceTextMatchedBy(UnaryExpression);
+  // 5. Let closure be OrdinaryFunctionCreate(%Function.prototype%, sourceText, CaptureParameters, CaptureBody, lexical-this, scope, privateScope).
+  const closure = OrdinaryFunctionCreate(
+    surroundingAgent.intrinsic('%Function.prototype%'),
+    sourceText,
+    CaptureParameters,
+    CaptureBody,
+    'lexical-this',
+    scope,
+    privateScope,
+  );
+  // 6. Perform SetFunctionName(closure, "").
+  SetFunctionName(closure, new Value(''));
+  // 7. Return closure.
+  return closure;
+}
+
 // UnaryExpression :
 //  `delete` UnaryExpression
 //  `void` UnaryExpression
@@ -173,6 +202,7 @@ function* Evaluate_UnaryExpression_Bang({ UnaryExpression }) {
 //  `-` UnaryExpression
 //  `~` UnaryExpression
 //  `!` UnaryExpression
+//  `&` CaptureExpression
 export function* Evaluate_UnaryExpression(UnaryExpression) {
   switch (UnaryExpression.operator) {
     case 'delete':
@@ -189,6 +219,8 @@ export function* Evaluate_UnaryExpression(UnaryExpression) {
       return yield* Evaluate_UnaryExpression_Tilde(UnaryExpression);
     case '!':
       return yield* Evaluate_UnaryExpression_Bang(UnaryExpression);
+    case '&':
+      return yield* Evaluate_UnaryExpression_Ampersand(UnaryExpression);
 
     default:
       throw new OutOfRange('Evaluate_UnaryExpression', UnaryExpression);
