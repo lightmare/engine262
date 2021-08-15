@@ -24,6 +24,8 @@ export const isIdentifierPart = (c) => SingleCharTokens[c] === Token.IDENTIFIER 
 export const isLeadingSurrogate = (cp) => cp >= 0xD800 && cp <= 0xDBFF;
 export const isTrailingSurrogate = (cp) => cp >= 0xDC00 && cp <= 0xDFFF;
 
+const rePlaceholderIndex = /[1-9][0-9]*/y;
+
 const SingleCharTokens = {
   '__proto__': null,
   '0': Token.NUMBER,
@@ -470,7 +472,7 @@ export class Lexer {
           return Token.DIV;
 
         case Token.BIT_AND:
-          // & && &= &&=
+          // & && &= &&= &N
           if (c1 === '&') {
             this.position += 1;
             if (this.source[this.position] === '=') {
@@ -482,6 +484,16 @@ export class Lexer {
           if (c1 === '=') {
             this.position += 1;
             return Token.ASSIGN_BIT_AND;
+          }
+          rePlaceholderIndex.lastIndex = this.position;
+          if (rePlaceholderIndex.test(this.source)) {
+            const end = rePlaceholderIndex.lastIndex;
+            this.scannedValue = this.source.slice(this.position, end);
+            this.position = end;
+            if (end < this.source.length && isIdentifierPart(this.source[end])) {
+              this.unexpected(this.position);
+            }
+            return Token.CAPTURE_PLACEHOLDER;
           }
           return Token.BIT_AND;
 
