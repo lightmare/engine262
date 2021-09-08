@@ -55,6 +55,14 @@ textarea:disabled {
   flex-shrink: 1;
 }
 
+#input-section {
+  width: 60%;
+}
+
+#output-section {
+  width: 40%;
+}
+
 #output {
   flex-grow: 1;
   min-height: 200px;
